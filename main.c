@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <malloc.h>
+#include <math.h>
 
 PSP_MODULE_INFO("SimEndurance3D", 0, 1, 0);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
@@ -15,64 +16,72 @@ PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
 #define SCR_WIDTH (480)
 #define SCR_HEIGHT (272)
 
-static unsigned int __attribute__((aligned(16))) list[262144];
+static unsigned int __attribute__((aligned(16))) list;
 
 typedef struct {
     unsigned int color;
     float x, y, z;
 } Vertex;
 
-// Model 3D cadangan (bentuk bodi mobil sederhana) jika mobil.obj belum dimasukkan
-Vertex __attribute__((aligned(16))) fallbackCar[12] = {
-    // Atap & kap depan (Merah balap)
-    {0xFF0000FF,  0.0f,  0.6f, -1.5f}, {0xFF0000CC, -0.8f,  0.0f,  1.5f}, {0xFF0000CC,  0.8f,  0.0f,  1.5f},
-    // Sisi kanan (Merah gelap)
-    {0xFF0000FF,  0.0f,  0.6f, -1.5f}, {0xFF000088,  0.8f,  0.0f,  1.5f}, {0xFF000088,  0.8f,  0.0f, -1.5f},
-    // Sisi kiri (Merah gelap)
-    {0xFF0000FF,  0.0f,  0.6f, -1.5f}, {0xFF000088, -0.8f,  0.0f, -1.5f}, {0xFF000088, -0.8f,  0.0f,  1.5f},
-    // Bagian belakang (Abu-abu gelap)
-    {0xFF0000FF,  0.0f,  0.6f, -1.5f}, {0xFF333333,  0.8f,  0.0f, -1.5f}, {0xFF333333, -0.8f,  0.0f, -1.5f}
+typedef struct {
+    Vertex* vertices;
+    int vertexCount;
+} Model3D;
+
+// Cadangan Balok Skala 1:1 BMW M4 GT3 Evo (Lebar 2.04m, Tinggi 1.30m, Panjang 5.02m)
+Vertex __attribute__((aligned(16))) fallbackM4GT3 = {
+    // Atap (Merah terang)
+    {0xFF0000FF, -1.02f, 1.30f, -2.51f}, {0xFF0000FF,  1.02f, 1.30f, -2.51f}, {0xFF0000CC,  1.02f, 1.30f,  2.51f},
+    {0xFF0000FF, -1.02f, 1.30f, -2.51f}, {0xFF0000CC,  1.02f, 1.30f,  2.51f}, {0xFF0000CC, -1.02f, 1.30f,  2.51f},
+    // Depan (Putih/Kuning lampu)
+    {0xFF00FFFF, -1.02f, 0.00f, -2.51f}, {0xFF00FFFF,  1.02f, 0.00f, -2.51f}, {0xFF0000FF,  1.02f, 1.30f, -2.51f},
+    {0xFF00FFFF, -1.02f, 0.00f, -2.51f}, {0xFF0000FF,  1.02f, 1.30f, -2.51f}, {0xFF0000FF, -1.02f, 1.30f, -2.51f},
+    // Belakang (Abu-abu gelap diffuser)
+    {0xFF222222, -1.02f, 0.00f,  2.51f}, {0xFF222222,  1.02f, 0.00f,  2.51f}, {0xFF000099,  1.02f, 1.30f,  2.51f},
+    {0xFF222222, -1.02f, 0.00f,  2.51f}, {0xFF000099,  1.02f, 1.30f,  2.51f}, {0xFF000099, -1.02f, 1.30f,  2.51f},
+    // Sisi Kiri (Merah sedang)
+    {0xFF0000AA, -1.02f, 0.00f, -2.51f}, {0xFF0000AA, -1.02f, 0.00f,  2.51f}, {0xFF0000DD, -1.02f, 1.30f,  2.51f},
+    {0xFF0000AA, -1.02f, 0.00f, -2.51f}, {0xFF0000DD, -1.02f, 1.30f,  2.51f}, {0xFF0000DD, -1.02f, 1.30f, -2.51f},
+    // Sisi Kanan (Merah sedang)
+    {0xFF0000AA,  1.02f, 0.00f, -2.51f}, {0xFF0000AA,  1.02f, 0.00f,  2.51f}, {0xFF0000DD,  1.02f, 1.30f,  2.51f},
+    {0xFF0000AA,  1.02f, 0.00f, -2.51f}, {0xFF0000DD,  1.02f, 1.30f,  2.51f}, {0xFF0000DD,  1.02f, 1.30f, -2.51f}
 };
 
-// Lintasan aspal sederhana di bawah mobil
-Vertex __attribute__((aligned(16))) trackFloor[6] = {
-    {0xFF444444, -6.0f, -0.05f, -20.0f}, {0xFF444444,  6.0f, -0.05f, -20.0f}, {0xFF222222,  6.0f, -0.05f,  20.0f},
-    {0xFF444444, -6.0f, -0.05f, -20.0f}, {0xFF222222,  6.0f, -0.05f,  20.0f}, {0xFF222222, -6.0f, -0.05f,  20.0f}
+// Cadangan Trek Uji Coba Lebar 15 Meter (-7.5m sampai +7.5m) Skala 1:1
+Vertex __attribute__((aligned(16))) fallbackTrack15m = {
+    {0xFF444444, -7.5f, 0.0f, -200.0f}, {0xFF444444,  7.5f, 0.0f, -200.0f}, {0xFF2A2A2A,  7.5f, 0.0f,  200.0f},
+    {0xFF444444, -7.5f, 0.0f, -200.0f}, {0xFF2A2A2A,  7.5f, 0.0f,  200.0f}, {0xFF2A2A2A, -7.5f, 0.0f,  200.0f}
 };
 
-Vertex* customModel = NULL;
-int customVertexCount = 0;
-
-// Fungsi pembaca file .obj (wajib export dengan opsi Triangulate Faces)
-void loadObjModel(const char* filename) {
+Model3D loadObjModel(const char* filename, int maxVertices, unsigned int baseColor) {
+    Model3D model = {NULL, 0};
     FILE* file = fopen(filename, "r");
-    if (!file) return;
+    if (!file) return model;
 
-    float* vx = (float*)malloc(sizeof(float) * 10000);
-    float* vy = (float*)malloc(sizeof(float) * 10000);
-    float* vz = (float*)malloc(sizeof(float) * 10000);
+    float* vx = (float*)malloc(sizeof(float) * maxVertices);
+    float* vy = (float*)malloc(sizeof(float) * maxVertices);
+    float* vz = (float*)malloc(sizeof(float) * maxVertices);
     int vCount = 0;
 
-    customModel = (Vertex*)memalign(16, sizeof(Vertex) * 30000);
-    customVertexCount = 0;
+    model.vertices = (Vertex*)memalign(16, sizeof(Vertex) * maxVertices * 3);
 
-    char line[256];
+    char line;
     while (fgets(line, sizeof(line), file)) {
-        if (line[0] == 'v' && line[1] == ' ') {
-            sscanf(line, "v %f %f %f", &vx[vCount], &vy[vCount], &vz[vCount]);
-            vCount++;
-        } else if (line[0] == 'f' && line[1] == ' ') {
-            int i1, i2, i3;
-            char s1[32], s2[32], s3[32];
+        if (line == 'v' && line == ' ') {
+            if (vCount < maxVertices) {
+                sscanf(line, "v %f %f %f", &vx[vCount], &vy[vCount], &vz[vCount]);
+                vCount++;
+            }
+        } else if (line == 'f' && line == ' ') {
+            char s1, s2, s3;
             if (sscanf(line, "f %31s %31s %31s", s1, s2, s3) == 3) {
-                i1 = atoi(s1) - 1;
-                i2 = atoi(s2) - 1;
-                i3 = atoi(s3) - 1;
+                int i1 = atoi(s1) - 1;
+                int i2 = atoi(s2) - 1;
+                int i3 = atoi(s3) - 1;
                 if (i1 >= 0 && i2 >= 0 && i3 >= 0 && i1 < vCount && i2 < vCount && i3 < vCount) {
-                    unsigned int shade = 0xFF888888 + ((int)(vy[i1] * 40) & 0x55);
-                    customModel[customVertexCount++] = (Vertex){shade, vx[i1], vy[i1], vz[i1]};
-                    customModel[customVertexCount++] = (Vertex){0xFFAAAAAA, vx[i2], vy[i2], vz[i2]};
-                    customModel[customVertexCount++] = (Vertex){0xFF666666, vx[i3], vy[i3], vz[i3]};
+                    model.vertices[model.vertexCount++] = (Vertex){baseColor, vx[i1], vy[i1], vz[i1]};
+                    model.vertices[model.vertexCount++] = (Vertex){baseColor - 0x00181818, vx[i2], vy[i2], vz[i2]};
+                    model.vertices[model.vertexCount++] = (Vertex){baseColor - 0x00303030, vx[i3], vy[i3], vz[i3]};
                 }
             }
         }
@@ -80,6 +89,7 @@ void loadObjModel(const char* filename) {
     free(vx); free(vy); free(vz);
     fclose(file);
     sceKernelDcacheWritebackAll();
+    return model;
 }
 
 int exit_callback(int arg1, int arg2, void *common) {
@@ -98,10 +108,10 @@ int main(void) {
     int thid = sceKernelCreateThread("update_thread", CallbackThread, 0x11, 0xFA0, 0, 0);
     if (thid >= 0) sceKernelStartThread(thid, 0, 0);
 
-    // Coba muat file mobil.obj dari folder yang sama dengan EBOOT.PBP
-    loadObjModel("mobil.obj");
+    // Muat model 3D skala 1:1 dari folder game
+    Model3D carModel = loadObjModel("mobil.obj", 10000, 0xFF0000EE);
+    Model3D trackModel = loadObjModel("circuit.obj", 30000, 0xFF555555);
 
-    // Inisialisasi Hardware 3D PSP GU
     sceGuInit();
     sceGuStart(GU_DIRECT, list);
     sceGuDrawBuffer(GU_PSM_8888, (void*)0, BUF_WIDTH);
@@ -114,6 +124,7 @@ int main(void) {
     sceGuEnable(GU_SCISSOR_TEST);
     sceGuDepthFunc(GU_GEQUAL);
     sceGuEnable(GU_DEPTH_TEST);
+    sceGuDisable(GU_CULL_FACE);
     sceGuShadeModel(GU_SMOOTH);
     sceGuFinish();
     sceGuSync(0, 0);
@@ -124,58 +135,116 @@ int main(void) {
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 
+    // Variabel fisika skala 1:1 (satuan meter per frame @ 60fps)
     float carX = 0.0f, carZ = 0.0f, carAngle = 0.0f;
+    float speed = 0.0f; // 1.0f = 60 m/s (~216 km/jam)
+    float smoothSteer = 0.0f;
 
     while (1) {
         sceCtrlReadBufferPositive(&pad, 1);
 
-        // Kontrol setir dengan Analog X
-        float steer = ((float)pad.Lx - 128.0f) / 128.0f;
-        if (steer > 0.15f || steer < -0.15f) {
-            carAngle -= steer * 0.04f;
+        // 1. Handling Analog Kiri TANPA Deadzone + Smoothing Halus
+        float rawSteer = ((float)pad.Lx - 128.0f) / 128.0f;
+        // Kurva halus agar belokan kecil sangat presisi namun tetap penuh saat mentok
+        float curvedSteer = rawSteer * (0.65f + 0.35f * fabsf(rawSteer));
+        smoothSteer += (curvedSteer - smoothSteer) * 0.25f;
+
+        // Mobil hanya berbelok jika ada kecepatan (realistis seperti mobil asli)
+        if (fabsf(speed) > 0.005f) {
+            float dir = (speed >= 0.0f) ? 1.0f : -1.0f;
+            // Radius belok sedikit melambat di kecepatan sangat tinggi agar stabil
+            float speedFactor = 1.0f / (1.0f + fabsf(speed) * 0.8f);
+            carAngle -= smoothSteer * 0.032f * speedFactor * dir;
         }
 
-        // Gas (X) dan Mundur/Rem (Kotak)
+        // 2. Kontrol Tombol: X = Gas, Kotak = Rem, Segitiga = Mundur
         if (pad.Buttons & PSP_CTRL_CROSS) {
-            carZ -= 0.08f;
+            // Akselerasi maju
+            speed += 0.006f;
+        } else if (pad.Buttons & PSP_CTRL_SQUARE) {
+            // Pengereman kuat hingga berhenti (0.0)
+            if (speed > 0.0f) {
+                speed -= 0.015f;
+                if (speed < 0.0f) speed = 0.0f;
+            } else if (speed < 0.0f) {
+                speed += 0.015f;
+                if (speed > 0.0f) speed = 0.0f;
+            }
+        } else if (pad.Buttons & PSP_CTRL_TRIANGLE) {
+            // Gigi mundur (aktif jika mobil sudah pelan/berhenti)
+            if (speed <= 0.05f) {
+                speed -= 0.005f;
+            }
+        } else {
+            // Hambatan angin & gesekan ban alami (engine brake ringan)
+            speed *= 0.992f;
+            if (fabsf(speed) < 0.0005f) speed = 0.0f;
         }
-        if (pad.Buttons & PSP_CTRL_SQUARE) {
-            carZ += 0.08f;
-        }
+
+        // Batas kecepatan maksimum (1.25 m/frame = 75 m/s = 270 km/jam untuk GT3)
+        if (speed > 1.25f) speed = 1.25f;
+        if (speed < -0.35f) speed = -0.35f; // Maks mundur ~75 km/jam
+
+        // Perbarui posisi mobil di dunia 3D (skala meter)
+        carX -= sinf(carAngle) * speed;
+        carZ -= cosf(carAngle) * speed;
 
         sceGuStart(GU_DIRECT, list);
-        // Warna langit biru cerah (ABGR format)
         sceGuClearColor(0xFFEBCE87);
         sceGuClearDepth(0);
         sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
 
-        // Atur Kamera Perspektif
+        // Kamera Perspektif Jarak Jauh (hingga 1000 meter untuk trek 1:1)
         sceGumMatrixMode(GU_PROJECTION);
         sceGumLoadIdentity();
-        sceGumPerspective(60.0f, 16.0f / 9.0f, 0.5f, 100.0f);
+        sceGumPerspective(60.0f, 16.0f / 9.0f, 0.5f, 1000.0f);
 
+        // 3. Kamera Luar Mobil (Chase Cam) + Tombol Bulat untuk Look Behind
         sceGumMatrixMode(GU_VIEW);
         sceGumLoadIdentity();
-        ScePspFVector3 camPos = {0.0f, 2.2f, carZ + 4.5f};
-        ScePspFVector3 camLook = {0.0f, 0.5f, carZ - 2.0f};
+        ScePspFVector3 camPos, camLook;
         ScePspFVector3 camUp = {0.0f, 1.0f, 0.0f};
+
+        if (pad.Buttons & PSP_CTRL_CIRCLE) {
+            // Look Behind: Kamera pindah ke depan mobil menghadap ke belakang
+            camPos.x = carX - sinf(carAngle) * 6.5f;
+            camPos.y = 2.2f;
+            camPos.z = carZ - cosf(carAngle) * 6.5f;
+
+            camLook.x = carX + sinf(carAngle) * 4.0f;
+            camLook.y = 0.9f;
+            camLook.z = carZ + cosf(carAngle) * 4.0f;
+        } else {
+            // Kamera Normal di Belakang Mobil (jarak 6.5m, tinggi 2.2m)
+            camPos.x = carX + sinf(carAngle) * 6.5f;
+            camPos.y = 2.2f;
+            camPos.z = carZ + cosf(carAngle) * 6.5f;
+
+            camLook.x = carX - sinf(carAngle) * 5.0f;
+            camLook.y = 0.9f;
+            camLook.z = carZ - cosf(carAngle) * 5.0f;
+        }
         sceGumLookAt(&camPos, &camLook, &camUp);
 
-        // Gambar Lintasan Aspal
+        // Render Trek Uji Coba 15 Meter
         sceGumMatrixMode(GU_MODEL);
         sceGumLoadIdentity();
-        sceGumDrawArray(GU_TRIANGLES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D, 6, 0, trackFloor);
+        if (trackModel.vertices != NULL && trackModel.vertexCount > 0) {
+            sceGumDrawArray(GU_TRIANGLES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D, trackModel.vertexCount, 0, trackModel.vertices);
+        } else {
+            sceGumDrawArray(GU_TRIANGLES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D, 6, 0, fallbackTrack15m);
+        }
 
-        // Gambar Model 3D Mobil
+        // Render Mobil Prototipe Skala 1:1
         sceGumLoadIdentity();
         ScePspFVector3 pos = {carX, 0.0f, carZ};
         sceGumTranslate(&pos);
         sceGumRotateY(carAngle);
 
-        if (customModel != NULL && customVertexCount > 0) {
-            sceGumDrawArray(GU_TRIANGLES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D, customVertexCount, 0, customModel);
+        if (carModel.vertices != NULL && carModel.vertexCount > 0) {
+            sceGumDrawArray(GU_TRIANGLES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D, carModel.vertexCount, 0, carModel.vertices);
         } else {
-            sceGumDrawArray(GU_TRIANGLES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D, 12, 0, fallbackCar);
+            sceGumDrawArray(GU_TRIANGLES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_3D, 30, 0, fallbackM4GT3);
         }
 
         sceGuFinish();
